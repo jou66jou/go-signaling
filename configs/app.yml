@@ -1,0 +1,6 @@
+databases:
+  - name: heroku_cleardb
+    address: us-cdbr-iron-east-04.cleardb.net
+    username: be06b5423af7ce
+    password: 982753ee
+    dbname: heroku_0a486827dc8b543

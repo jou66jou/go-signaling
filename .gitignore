@@ -1,0 +1,5 @@
+test
+.env
+.docker_build/
+bin/
+exec/

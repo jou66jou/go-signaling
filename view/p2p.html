@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8" />
+    <title>sfu</title>
+
+    <style type="text/css">
+        .comments {
+            width: 100%;
+            /*auto width*/
+            overflow: auto;
+            word-break: break-all;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="message"></div>
+    <input id='selectVideo' type="file" accept="video/*" />
+    <video id="video1" width="320" height="240" autoplay muted controls></video> <br />
+    <label for="fileName">File Name:</label>
+    <input type="text" id="fileName" name="fileName"><br><br>
+    <button class="sessbtn" onclick="window.createSession(true)">Publish</button>
+    <button class="sessbtn" onclick="window.createSession(false)">Subscribe</button>
+
+    <div id="signalingContainer" style="display: none">
+        Local SDP<textarea class="comments" id="localSDP" rows=10 cols=30
+            onpropertychange="this.style.posHeight=this.scrollHeight "></textarea>
+        Remote SDP<textarea class="comments" id="remoteSDP" rows=10 cols=30
+            onpropertychange="this.style.posHeight=this.scrollHeight "></textarea>
+        <button onclick="window.setRemote()"> Set Remote SDP</button>
+        <!-- <button onclick="window.startSession()"> Start Session </button> -->
+    </div>
+
+    <div id="logs"></div>
+    <script>
+        // 載入影片至 video
+        (function localFileVideoPlayer() {
+            var URL = window.URL || window.webkitURL
+            var displayMessage = function (message, isError) {
+                var element = document.querySelector('#message')
+                element.innerHTML = message
+                element.className = isError ? 'error' : 'info'
+            }
+            var playSelectedFile = function (event) {
+                var file = this.files[0]
+                var type = file.type
+                var videoNode = document.getElementById('video1')
+                var canPlay = videoNode.canPlayType(type)
+                if (canPlay === '') canPlay = 'no'
+                var message = 'Can play type "' + type + '": ' + canPlay
+                var isError = canPlay === 'no'
+                displayMessage(message, isError)
+
+                if (isError) {
+                    return
+                }
+
+                var fileURL = URL.createObjectURL(file)
+                videoNode.src = fileURL
+            }
+            var inputNode = document.getElementById('selectVideo')
+            inputNode.addEventListener('change', playSelectedFile, false)
+        })()
+
+        var log = msg => {
+            document.getElementById('logs').innerHTML += msg + '<br>'
+        }
+        var peerID = ''
+        var sock = null
+        var wsuri = "ws://" + location.host + "/peer"
+        var dataChannel = null
+        let pc = new RTCPeerConnection({
+            iceServers: [
+                {
+                    urls: 'stun:stun.l.google.com:19302'
+                }
+            ]
+        })
+
+        window.onload = function () {
+            sock = new WebSocket(wsuri)
+            sock.onopen = function () {
+                console.log("websocket connected to " + wsuri)
+            }
+            sock.onclose = function (e) {
+                console.log("websocket connection closed (" + e.code + ")")
+            }
+            // // 如果 ws 收到 remote sdp 的訊息則開始 p2p 連線
+            sock.onmessage = function (e) {
+                var wsmsg = JSON.parse(e.data)
+                switch (wsmsg.type) {
+                    case 'offer':
+                        console.log('get offer from : ' + wsmsg.offerID)
+                        document.getElementById('remoteSDP').value = wsmsg.sdp
+                        window.setRemote(wsmsg.offerID)
+                        break
+                    case 'answer':
+                        document.getElementById('remoteSDP').value = wsmsg.sdp
+                        window.setRemote('')
+                        break
+                    case 'peerID':
+                        if (peerID != wsmsg.peerID) {
+                            peerID = wsmsg.peerID
+                        }
+                        break
+                    default:
+                        console.log("ws unknow type, content : " + e.data)
+                        break
+                }
+            }
+            sock.onerror = function (e) {
+                console.log("websocket error: " + e.data)
+            }
+        }
+
+        // 執行推播者或接收方
+        window.createSession = isPublisher => {
+            let fileName = document.getElementById('fileName').value
+            if (fileName == '' & isPublisher) {
+                log('Please input file name')
+                return
+            }
+            pc.oniceconnectionstatechange = e => log('oniceconnectionstatechange : ' + pc.iceConnectionState)
+            pc.onicecandidate = event => {
+                if (event.candidate === null) {
+                    // console.log('pc.localDescription.sdp : ' + pc.localDescription.sdp)
+                    document.getElementById('localSDP').value = pc.localDescription.sdp
+                    // 透過 ws 傳 offer
+                    var offer = {
+                        type: 'offer',
+                        fileName: document.getElementById('fileName').value,
+                        sdp: pc.localDescription.sdp
+                    }
+                    sock.send(JSON.stringify(offer))
+                }
+            }
+
+            if (isPublisher) {
+                // 推播方 pc2
+                localStream = document.getElementById('video1').captureStream()
+                localStream.getTracks().forEach(track => pc.addTrack(track, localStream))
+                console.log('Adding Local Stream to peer connection')
+                var pub = {
+                    type: 'pub',
+                    fileName: document.getElementById('fileName').value,
+                }
+                sock.send(JSON.stringify(pub))
+            } else {
+                // 請求方 pc1
+                console.log("Subcriber createOffer")
+                pc.addTransceiver('audio', { 'direction': 'recvonly' })
+                pc.addTransceiver('video', { 'direction': 'recvonly' })
+
+                pc.createOffer()
+                    .then(d => pc.setLocalDescription(d))
+                    .catch(log)
+
+                console.log("Subcriber ontrack")
+                pc.ontrack = function (event) {
+                    var el = document.getElementById('video1')
+                    el.srcObject = event.streams[0]
+                    el.autoplay = true
+                    el.controls = true
+                }
+            }
+
+            window.setRemote = (offerID) => {
+                let sd = document.getElementById('remoteSDP').value
+                if (document.getElementById('localSDP').value == "") {
+                    pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: sd }))
+                        .then(() => pc.createAnswer().then(d => {
+                            document.getElementById('localSDP').value = d.sdp
+                            pc.setLocalDescription(d)
+                            var ans = {
+                                type: 'answer',
+                                fileName: document.getElementById('fileName').value,
+                                sdp: pc.localDescription.sdp,
+                                offerID: offerID
+                            }
+                            sock.send(JSON.stringify(ans))
+                        }, onSetSessionDescriptionError))
+                } else {
+                    pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: sd })).then(() => { }, onSetSessionDescriptionError)
+                }
+            }
+
+            let btns = document.getElementsByClassName('sessbtn')
+            for (let i = 0; i < btns.length; i++) {
+                btns[i].style = 'display: none'
+            }
+
+            document.getElementById('signalingContainer').style = 'display: block'
+        }
+
+        function onSetSessionDescriptionError(error) {
+            console.log('Failed to set session description: ' + error.toString())
+        }
+
+    </script>
+
+</body>
+
+</html>
