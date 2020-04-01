@@ -85,9 +85,9 @@ func newEchoHandler(cfg *config.Configuration) http.Handler {
 		}
 	})
 
-	// e.GET("/", func(c echo.Context) error {
-	// 	return c.String(http.StatusOK, "Hello World!!!")
-	// })
+	e.GET("/", func(c echo.Context) error {
+		return c.String(http.StatusOK, "Hello World!!!")
+	})
 	e.File("/sfu", "view/sfu.html")
 	e.File("/p2p", "view/p2p.html")
 
